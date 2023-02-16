@@ -4,6 +4,13 @@
 #include <string>
 #include <sstream>
 #include <stdexcept>
+#include <filesystem>
+
+#ifdef __linux__
+constexpr auto FLAG = std::regex::ECMAScript | std::regex::multiline;
+#elif defined(_WIN32)
+constexpr auto FLAG = std::regex::ECMAScript;
+#endif
 
 template<typename ... Args>
 std::string string_format(const std::string& format, Args ... args)
@@ -16,40 +23,25 @@ std::string string_format(const std::string& format, Args ... args)
     return std::string(buf.get(), buf.get() + size - 1); // We don't want the '\0' inside
 }
 
-int main(int argc, char* argv[])
+void ParseFile(std::string source, std::string output)
 {
-    if (argc < 3)
-    {
-        std::cout << "You must specify input and output" << std::endl;
-        return EXIT_FAILURE;
-    }
-
-	std::string source = argv[1];
-    std::string dest = argv[2];
-
     std::ifstream ifs(source);
     if (!ifs.is_open())
     {
         std::cout << "Error opening file '" << source << "'" << std::endl;
-        return EXIT_FAILURE;
-    }
-
-    if (dest.empty())
-    {
-        std::cout << "You have to specify output name" << std::endl;
-        return EXIT_FAILURE;
+        return;
     }
 
     std::string content((std::istreambuf_iterator<char>(ifs)), (std::istreambuf_iterator<char>()));
 
-    std::regex dashes_r("^\\s*---\\s*$");
+    std::regex dashes_r("^\\s*---\\s*$", FLAG);
     std::sregex_iterator it_end;
 
     auto it = std::sregex_iterator(content.begin(), content.end(), dashes_r);
     if (it == it_end)
     {
         std::cout << "[ERROR] dashes --- not found 1" << std::endl;
-        return EXIT_FAILURE;
+        return;
     }
     int64_t dashes_start = it->position() + it->length();
 
@@ -57,7 +49,7 @@ int main(int argc, char* argv[])
     if (it == it_end)
     {
         std::cout << "[ERROR] dashes --- not found 2" << std::endl;
-        return EXIT_FAILURE;
+        return;
     }
     int64_t dashes_end = it->position();
 
@@ -65,31 +57,31 @@ int main(int argc, char* argv[])
 
     std::string inside_str = content.substr(dashes_start, dashes_end - dashes_start);
     std::string new_str = "\n";
-    
+
     std::smatch sm;
-    std::regex title_r("^title\\s*:\\s*(.+)\\s*$");
+    std::regex title_r("^title\\s*:\\s*(.+)\\s*$", FLAG);
     if (!std::regex_search(inside_str, sm, title_r))
     {
         std::cout << "[ERROR] no title found inside dashes block" << std::endl;
-        return EXIT_FAILURE;
+        return;
     }
     new_str += string_format("Title: %s\n", sm[1].str().c_str());
 
-    std::regex date_r("^date\\s*:\\s*(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2}:\\d{2})\\s*$");
+    std::regex date_r("^date\\s*:\\s*(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2}:\\d{2})\\s*$", std::regex::ECMAScript);
     if (!std::regex_search(inside_str, sm, date_r))
     {
         std::cout << "[ERROR] no date found inside dashes block" << std::endl;
-        return EXIT_FAILURE;
+        return;
     }
     new_str += string_format("Date: %sT%s+0800\n", sm[1].str().c_str(), sm[2].str().c_str());
 
-    std::regex tags_r("^\\s*tags\\s*:\\s*$((?:\\s*^\\s*-\\s*.+\\s*$)+)");
+    std::regex tags_r("^\\s*tags\\s*:\\s*$((?:\\s*^\\s*-\\s*.+\\s*$)+)", FLAG);
     if (std::regex_search(inside_str, sm, tags_r))
     {
         new_str += "Tags:";
 
         std::string tags_str = sm[1].str();
-        std::regex tag_r("(?:^\\[.+\\]\\s*$|^\\s*-\\s*(.+)\\s*$)");
+        std::regex tag_r("(?:^\\[.+\\]\\s*$|^\\s*-\\s*(.+)\\s*$)", FLAG);
 
         for (auto it = std::sregex_iterator(tags_str.begin(), tags_str.end(), tag_r); it != std::sregex_iterator(); ++it)
         {
@@ -119,13 +111,13 @@ int main(int argc, char* argv[])
         new_str += "\n";
     }
 
-    std::regex cates_r("^\\s*categories\\s*:\\s*$((?:\\s*^\\s*-\\s*.+\\s*$)+)");
+    std::regex cates_r("^\\s*categories\\s*:\\s*$((?:\\s*^\\s*-\\s*.+\\s*$)+)", FLAG);
     if (std::regex_search(inside_str, sm, cates_r))
     {
         new_str += "Category:";
 
         std::string cate_str = sm[1].str();
-        std::regex cate_r("(?:^\\[.+\\]\\s*$|^\\s*-\\s*(.+)\\s*$)");
+        std::regex cate_r("(?:^\\[.+\\]\\s*$|^\\s*-\\s*(.+)\\s*$)", FLAG);
 
         for (auto it = std::sregex_iterator(cate_str.begin(), cate_str.end(), cate_r); it != std::sregex_iterator(); ++it)
         {
@@ -158,6 +150,48 @@ int main(int argc, char* argv[])
     content.erase(dashes_start, dashes_end - dashes_start);
     content.insert(dashes_start, new_str);
 
-    std::ofstream ofile(dest);
+    std::ofstream ofile(output);
     ofile << content;
+}
+
+int main(int argc, char* argv[])
+{
+    if (argc < 3)
+    {
+        std::cout << "You must specify input and output" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    std::string source;
+    std::string dest;
+
+    if (argc == 4)
+    {
+        std::string arg = argv[1];
+        source = argv[2];
+        dest = argv[3];
+
+        if (arg == "-d")
+        {
+            std::filesystem::path src_path = source;
+            if (!std::filesystem::exists(src_path))
+            {
+                std::cout << "Source dir not exists" << std::endl;
+                return EXIT_FAILURE;
+            }
+
+            std::filesystem::path dest_path = dest;
+            if (!std::filesystem::exists(dest_path))
+                std::filesystem::create_directory(dest_path);
+
+            for (const auto& entry : std::filesystem::directory_iterator(src_path))
+            {
+                ParseFile(entry.path().string(), dest_path.string() + "/" + entry.path().filename().string());
+            }
+        }
+    }
+    else
+    {
+        ParseFile(argv[1], argv[2]);
+    }
 }
